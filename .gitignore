@@ -53,5 +53,4 @@ Thumbs.db
 .eslintcache
 
 # Docker
-docker-compose.yml
 docker-test.sh
