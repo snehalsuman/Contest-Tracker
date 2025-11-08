@@ -4,16 +4,15 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const cron = require('node-cron');
 const axios = require('axios');
-const path = require('path');
 const contestRoutes = require("./routes/contestRoutes");
 const fetchSolutions = require("./utils/youtubeScraper");
 const fetchContests = require("./utils/fetchContests");
 const connectDB = require("./config/db");
 const app = express();
-connectDB();
-app.use(cors());
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Middleware setup
+app.use(cors());
+app.use(express.json());
 
 // Function to fetch contests and store them in the database
 const fetchAndStoreContests = async () => {
@@ -88,36 +87,88 @@ const initialDataFetch = async () => {
 };
 
 /**
- * Configure and start the server
+ * Configure routes
  */
-const startServer = () => {
-  // Set up middleware
-  app.use(express.json());
-
+const setupRoutes = () => {
   // Add a health check endpoint for monitoring services like UptimeRobot
   app.get('/api/health', (req, res) => {
-    res.status(200).json({ status: 'ok', message: 'Server is running' });
+    res.status(200).json({ 
+      status: 'ok', 
+      message: 'Server is running',
+      database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
   });
 
   // Routes
   app.use("/api/contests", contestRoutes);
 
-  // Catch-all route to handle SPA routing
+  // Catch-all route for API - return 404 for unknown routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    // Only handle non-API routes (in case frontend is served separately)
+    if (req.path.startsWith('/api')) {
+      res.status(404).json({ error: 'API endpoint not found' });
+    } else {
+      // For non-API routes, return 404 (frontend should handle routing)
+      res.status(404).json({ error: 'Route not found' });
+    }
   });
+};
 
-  // Start listening
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+/**
+ * Configure and start the server
+ */
+const startServer = async () => {
+  try {
+    // Connect to database first
+    console.log("🔌 Connecting to MongoDB...");
+    await connectDB();
+    console.log("✅ MongoDB connected successfully");
 
-    // Set up cron jobs after server starts to ensure the health endpoint is available
-    setupCronJobs();
+    // Set up routes
+    setupRoutes();
 
-    // Check for initial data
-    initialDataFetch();
-  });
+    // Start listening
+    const PORT = process.env.PORT || 5000;
+    
+    // Check if port is available
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+
+      // Set up cron jobs after server starts to ensure the health endpoint is available
+      setupCronJobs();
+
+      // Check for initial data
+      initialDataFetch();
+    });
+
+    // Handle server errors
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use. Please free the port or use a different port.`);
+        console.error(`💡 Try: lsof -ti:${PORT} | xargs kill -9`);
+        process.exit(1);
+      } else {
+        console.error('❌ Server error:', error);
+        process.exit(1);
+      }
+    });
+
+    // Handle graceful shutdown
+    process.on('SIGTERM', () => {
+      console.log('SIGTERM signal received: closing HTTP server');
+      server.close(() => {
+        console.log('HTTP server closed');
+        mongoose.connection.close(false, () => {
+          console.log('MongoDB connection closed');
+          process.exit(0);
+        });
+      });
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to start server:', error.message);
+    process.exit(1);
+  }
 };
 
 // Start the server
